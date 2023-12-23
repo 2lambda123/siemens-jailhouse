@@ -1,7 +1,7 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Copyright (c) Siemens AG, 2013-2017
+ * Copyright (c) Siemens AG, 2013-2022
  *
  * Authors:
  *  Jan Kiszka <jan.kiszka@siemens.com>
@@ -59,9 +59,10 @@ static void init_early(unsigned int cpu_id)
 
 	root_cell.config = &system_config->root_cell;
 
-	error = cell_init(&root_cell);
-	if (error)
+	if (hypervisor_header.online_cpus != root_cell.config->num_cpus) {
+		error = trace_error(-EINVAL);
 		return;
+	}
 
 	error = arch_init_early();
 	if (error)
@@ -103,7 +104,8 @@ static void cpu_init(struct per_cpu *cpu_data)
 
 	printk(" CPU %d... ", cpu_data->public.cpu_id);
 
-	if (!cpu_id_valid(cpu_data->public.cpu_id))
+	if (cpu_data->public.cpu_id >= system_config->root_cell.num_cpus ||
+	    cpu_data->public.cell != NULL)
 		goto failed;
 
 	cpu_data->public.cell = &root_cell;
@@ -164,16 +166,13 @@ failed:
 
 static void init_late(void)
 {
-	unsigned int n, cpu, expected_cpus = 0;
 	const struct jailhouse_memory *mem;
 	struct unit *unit;
+	unsigned int n;
 
-	for_each_cpu(cpu, root_cell.cpu_set)
-		expected_cpus++;
-	if (hypervisor_header.online_cpus != expected_cpus) {
-		error = trace_error(-EINVAL);
+	error = cell_init(&root_cell);
+	if (error)
 		return;
-	}
 
 	for_each_unit(unit) {
 		printk("Initializing unit: %s\n", unit->name);
@@ -260,6 +259,9 @@ int entry(unsigned int cpu_id, struct per_cpu *cpu_data)
 		arch_cpu_restore(cpu_id, error);
 		return error;
 	}
+
+	/* Process any internal events generated during setup. */
+	arch_check_events();
 
 	if (master)
 		printk("Activating hypervisor\n");

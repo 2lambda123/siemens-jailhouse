@@ -1,10 +1,13 @@
 /*
- * iMX8MM target - inmate-demo
+ * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Copyright 2020 NXP
+ * Configuration for inmate-demo on HopeRun HiHope RZ/G2M
+ * platform based on r8a774a1/r8a774a3: 4xA53 CPUs, SCIF1.
+ *
+ * Copyright (c) 2023, Renesas Electronics Corporation
  *
  * Authors:
- *  Peng Fan <peng.fan@nxp.com>
+ *  Lad Prabhakar <prabhakar.mahadev-lad.rj@bp.renesas.com>
  *
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
@@ -17,26 +20,28 @@ struct {
 	struct jailhouse_cell_desc cell;
 	struct jailhouse_cpu cpus[1];
 	struct jailhouse_memory mem_regions[8];
-	struct jailhouse_irqchip irqchips[1];
+	struct jailhouse_irqchip irqchips[2];
 	struct jailhouse_pci_device pci_devices[1];
 } __attribute__((packed)) config = {
 	.cell = {
 		.signature = JAILHOUSE_CELL_DESC_SIGNATURE,
 		.revision = JAILHOUSE_CONFIG_REVISION,
 		.architecture = JAILHOUSE_ARM64,
-		.name = "inmate-demo",
-		.flags = JAILHOUSE_CELL_PASSIVE_COMMREG,
+		.name = "renesas-r8a774a1-inmate-demo",
+		.flags = JAILHOUSE_CELL_PASSIVE_COMMREG |
+			 JAILHOUSE_CELL_VIRTUAL_CONSOLE_ACTIVE,
 
 		.num_cpus = ARRAY_SIZE(config.cpus),
 		.num_memory_regions = ARRAY_SIZE(config.mem_regions),
 		.num_irqchips = ARRAY_SIZE(config.irqchips),
 		.num_pci_devices = ARRAY_SIZE(config.pci_devices),
-		/* IVSHMEM_IRQ - 32 */
-		.vpci_irq_base = 76, /* Not include 32 base */
+
+		.vpci_irq_base = 24,
 
 		.console = {
-			.address = 0x30890000,
-			.type = JAILHOUSE_CON_TYPE_IMX,
+			.address = 0xe6e68000,
+			.size = 0x40,
+			.type = JAILHOUSE_CON_TYPE_SCIF,
 			.flags = JAILHOUSE_CON_ACCESS_MMIO |
 				 JAILHOUSE_CON_REGDIST_4,
 		},
@@ -44,85 +49,93 @@ struct {
 
 	.cpus = {
 		{
-			.phys_id = 1,
+			.phys_id = 0x0001,
 		},
 	},
 
 	.mem_regions = {
 		/* IVSHMEM shared memory regions (demo) */
 		{
-			.phys_start = 0xfd900000,
-			.virt_start = 0xfd900000,
+			.phys_start = 0xa9000000,
+			.virt_start = 0xa9000000,
 			.size = 0x1000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_ROOTSHARED,
 		},
 		{
-			.phys_start = 0xfd901000,
-			.virt_start = 0xfd901000,
+			.phys_start = 0xa9001000,
+			.virt_start = 0xa9001000,
 			.size = 0x9000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
-				JAILHOUSE_MEM_ROOTSHARED,
+				 JAILHOUSE_MEM_ROOTSHARED,
 		},
 		{
-			.phys_start = 0xfd90a000,
-			.virt_start = 0xfd90a000,
+			.phys_start = 0xa900a000,
+			.virt_start = 0xa900a000,
 			.size = 0x2000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_ROOTSHARED,
 		},
 		{
-			.phys_start = 0xfd90c000,
-			.virt_start = 0xfd90c000,
+			.phys_start = 0xa900c000,
+			.virt_start = 0xa900c000,
 			.size = 0x2000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
-				JAILHOUSE_MEM_ROOTSHARED,
+				 JAILHOUSE_MEM_ROOTSHARED,
 		},
 		{
-			.phys_start = 0xfd90e000,
-			.virt_start = 0xfd90e000,
+			.phys_start = 0xa900e000,
+			.virt_start = 0xa900e000,
 			.size = 0x2000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_ROOTSHARED,
 		},
-		/* UART2 */ {
-			.phys_start = 0x30890000,
-			.virt_start = 0x30890000,
-			.size = 0x1000,
+		/* SCIF1 */ {
+			.phys_start = 0xe6e68000,
+			.virt_start = 0xe6e68000,
+			.size = 0x40,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
-				JAILHOUSE_MEM_IO | JAILHOUSE_MEM_ROOTSHARED,
+				 JAILHOUSE_MEM_IO_8 | JAILHOUSE_MEM_IO_16 |
+				 JAILHOUSE_MEM_IO_UNALIGNED | JAILHOUSE_MEM_ROOTSHARED,
 		},
-		/* RAM: start from the bottom of inmate memory */ {
-			.phys_start = 0xc0000000,
-			.virt_start = 0,
-			.size = 0x00010000,
+		/* RAM */ {
+			.phys_start = 0x89000000,
+			.virt_start = 0x0,
+			.size = 0x6400000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
-				JAILHOUSE_MEM_EXECUTE | JAILHOUSE_MEM_LOADABLE,
+				 JAILHOUSE_MEM_EXECUTE | JAILHOUSE_MEM_LOADABLE,
 		},
 		/* communication region */ {
 			.virt_start = 0x80000000,
 			.size = 0x00001000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
-				JAILHOUSE_MEM_COMM_REGION,
+				 JAILHOUSE_MEM_COMM_REGION,
 		},
 	},
 
 	.irqchips = {
-		/* GIC */ {
-			.address = 0x38800000,
-			.pin_base = 96,
+		/* IVSHMEM */ {
+			.address = 0xf1010000,
+			.pin_base = 32,
 			.pin_bitmap = {
-				0x1 << (76 + 32 - 96) /* SPI 76 */
+				0x1000000, 0x0,
+			},
+		},
+		/* SCIF1 */ {
+			.address = 0xf1010000,
+			.pin_base = 160,
+			.pin_bitmap = {
+				0x2000000, 0x0,
 			},
 		},
 	},
 
 	.pci_devices = {
-		{
+		{ /* IVSHMEM (demo) */
 			.type = JAILHOUSE_PCI_TYPE_IVSHMEM,
-			.domain = 2,
+			.domain = 1,
 			.bdf = 0 << 3,
 			.bar_mask = JAILHOUSE_IVSHMEM_BAR_MASK_INTX,
 			.shmem_regions_start = 0,
 			.shmem_dev_id = 1,
-			.shmem_peers = 1,
+			.shmem_peers = 3,
 			.shmem_protocol = JAILHOUSE_SHMEM_PROTO_UNDEFINED,
 		},
 	},

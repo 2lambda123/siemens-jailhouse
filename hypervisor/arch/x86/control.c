@@ -1,7 +1,7 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Copyright (c) Siemens AG, 2013
+ * Copyright (c) Siemens AG, 2013-2022
  *
  * Authors:
  *  Jan Kiszka <jan.kiszka@siemens.com>
@@ -72,13 +72,12 @@ void arch_flush_cell_vcpu_caches(struct cell *cell)
 {
 	unsigned int cpu;
 
-	for_each_cpu(cpu, cell->cpu_set)
-		if (cpu == this_cpu_id()) {
+	for_each_cpu(cpu, &cell->cpu_set) {
+		if (cpu == this_cpu_id())
 			vcpu_tlb_flush();
-		} else {
+		else
 			public_per_cpu(cpu)->flush_vcpu_caches = true;
-			apic_send_nmi_ipi(public_per_cpu(cpu));
-		}
+	}
 }
 
 void arch_cell_destroy(struct cell *cell)
@@ -89,23 +88,14 @@ void arch_cell_destroy(struct cell *cell)
 void arch_cell_reset(struct cell *cell)
 {
 	struct jailhouse_comm_region *comm_region = &cell->comm_page.comm_region;
-	unsigned int cpu;
 
 	comm_region->pm_timer_address =
 		system_config->platform_info.x86.pm_timer_address;
-	/* comm_region, and hence num_cpus, is zero-initialised */
-	for_each_cpu(cpu, cell->cpu_set)
-		comm_region->num_cpus++;
+	comm_region->num_cpus = cell->config->num_cpus;
 	comm_region->tsc_khz = system_config->platform_info.x86.tsc_khz;
 	comm_region->apic_khz = system_config->platform_info.x86.apic_khz;
 
 	ioapic_cell_reset(cell);
-}
-
-void arch_config_commit(struct cell *cell_added_removed)
-{
-	iommu_config_commit(cell_added_removed);
-	ioapic_config_commit(cell_added_removed);
 }
 
 void arch_prepare_shutdown(void)
@@ -160,7 +150,7 @@ void x86_send_init_sipi(unsigned int cpu_id, enum x86_init_sipi type,
 	 */
 	if (type == X86_INIT) {
 		while (target_data->init_signaled) {
-			x86_check_events();
+			arch_check_events();
 			cpu_relax();
 		}
 	}
@@ -177,7 +167,7 @@ void __attribute__((weak)) cat_update(void)
 {
 }
 
-void x86_check_events(void)
+void arch_check_events(void)
 {
 	struct public_per_cpu *cpu_public = this_cpu_public();
 	int sipi_vector = -1;

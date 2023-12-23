@@ -1,7 +1,7 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Copyright (c) Siemens AG, 2013-2018
+ * Copyright (c) Siemens AG, 2013-2022
  *
  * Authors:
  *  Jan Kiszka <jan.kiszka@siemens.com>
@@ -23,12 +23,12 @@ typedef enum { true = 1, false = 0 } bool;
 
 /** Describes a CPU set. */
 struct cpu_set {
-	/** Maximum CPU ID expressible with this set. */
-	unsigned long max_cpu_id;
-	/** Bitmap of CPUs in the set.
-	 * @note Typically, the bitmap is extended by embedding this structure
-	 * into a larger buffer. */
-	unsigned long bitmap[1];
+	/** Smallest CPU ID in the set. */
+	unsigned int min_cpu_id;
+	/** Largest CPU ID in the set. */
+	unsigned int max_cpu_id;
+	/** Bitmap of CPUs in the set. */
+	unsigned long bitmap[(MAX_CPUS + BITS_PER_LONG - 1) / BITS_PER_LONG];
 };
 
 typedef signed char s8;

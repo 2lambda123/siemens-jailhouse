@@ -1,7 +1,7 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Copyright (c) Siemens AG, 2013
+ * Copyright (c) Siemens AG, 2013-2022
  * Copyright (c) Valentine Sinitsyn, 2014
  *
  * Authors:
@@ -33,7 +33,7 @@ bool using_x2apic;
 /**
  * Mapping from a physical APIC ID to the logical CPU ID as used by Jailhouse.
  */
-static u8 apic_to_cpu_id[] = { [0 ... APIC_MAX_PHYS_ID] = CPU_ID_INVALID };
+static u8 apic_to_cpu_id[] = { [0 ... APIC_MAX_PHYS_ID] = APIC_INVALID_CPU };
 
 /* Initialized for x2APIC, adjusted for xAPIC during init */
 static u32 apic_reserved_bits[] = {
@@ -140,6 +140,14 @@ unsigned long phys_processor_id(void)
 	return apic_ops.read_id();
 }
 
+unsigned int cpu_by_phys_processor_id(u64 phys_id)
+{
+	unsigned int cpu_id = phys_id < APIC_MAX_PHYS_ID ?
+		apic_to_cpu_id[phys_id] : INVALID_CPU_ID;
+
+	return cpu_id != APIC_INVALID_CPU ? cpu_id : INVALID_CPU_ID;
+}
+
 int apic_cpu_init(struct per_cpu *cpu_data)
 {
 	unsigned int xlc = MAX((apic_ext_features() >> 16) & 0xff,
@@ -151,9 +159,9 @@ int apic_cpu_init(struct per_cpu *cpu_data)
 
 	printk("(APIC ID %d) ", apic_id);
 
-	if (apic_id > APIC_MAX_PHYS_ID || cpu_id == CPU_ID_INVALID)
+	if (apic_id > APIC_MAX_PHYS_ID || cpu_id == APIC_INVALID_CPU)
 		return trace_error(-ERANGE);
-	if (apic_to_cpu_id[apic_id] != CPU_ID_INVALID)
+	if (apic_to_cpu_id[apic_id] != APIC_INVALID_CPU)
 		return trace_error(-EBUSY);
 	/* only flat mode with LDR corresponding to logical ID supported */
 	if (!using_x2apic) {
@@ -250,7 +258,7 @@ bool apic_filter_irq_dest(struct cell *cell, struct apic_irq_message *irq_msg)
 		if (using_x2apic)
 			dest = x2apic_filter_logical_dest(cell, dest);
 		else
-			dest &= cell->cpu_set->bitmap[0];
+			dest &= cell->cpu_set.bitmap[0];
 		/*
 		 * Linux may have programmed inactive vectors with too broad
 		 * destination masks. Return the adjusted mask and do not fail.
@@ -386,7 +394,7 @@ static void apic_send_ipi(unsigned int target_cpu_id, u32 orig_icr_hi,
 
 static void apic_send_logical_dest_ipi(u32 lo_val, u32 hi_val)
 {
-	unsigned int target_cpu_id = CPU_ID_INVALID;
+	unsigned int target_cpu_id = APIC_INVALID_CPU;
 	unsigned long dest = hi_val;
 	unsigned int logical_id;
 	unsigned int cluster_id;
@@ -420,7 +428,7 @@ static void apic_send_ipi_all(u32 lo_val, int except_cpu)
 	/* This implicitly selects APIC_ICR_SH_NONE. */
 	lo_val &= APIC_ICR_LVTM_MASK | APIC_ICR_DLVR_MASK |
 		  APIC_ICR_VECTOR_MASK;
-	for_each_cpu_except(cpu, this_cell()->cpu_set, except_cpu)
+	for_each_cpu_except(cpu, &this_cell()->cpu_set, except_cpu)
 		apic_send_ipi(cpu, 0, lo_val);
 }
 
@@ -469,7 +477,7 @@ static bool apic_handle_icr_write(u32 lo_val, u32 hi_val)
 		lo_val &= ~APIC_ICR_DEST_LOGICAL;
 		apic_send_logical_dest_ipi(lo_val, hi_val);
 	} else {
-		target_cpu_id = CPU_ID_INVALID;
+		target_cpu_id = APIC_INVALID_CPU;
 		if (hi_val <= APIC_MAX_PHYS_ID)
 			target_cpu_id = apic_to_cpu_id[hi_val];
 		apic_send_ipi(target_cpu_id, hi_val, lo_val);

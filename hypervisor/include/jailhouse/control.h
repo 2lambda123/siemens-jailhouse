@@ -1,7 +1,7 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Copyright (c) Siemens AG, 2013
+ * Copyright (c) Siemens AG, 2013-2022
  *
  * Authors:
  *  Jan Kiszka <jan.kiszka@siemens.com>
@@ -44,7 +44,7 @@ unsigned int next_cpu(unsigned int cpu, struct cpu_set *cpu_set,
  *
  * @return First CPU in set, or max_cpu_id + 1 if the set is empty.
  */
-#define first_cpu(set)		next_cpu(INVALID_CPU_ID, (set), INVALID_CPU_ID)
+#define first_cpu(set)	next_cpu((set)->min_cpu_id - 1, (set), INVALID_CPU_ID)
 
 /**
  * Loop-generating macro for iterating over all CPUs in a set.
@@ -54,7 +54,7 @@ unsigned int next_cpu(unsigned int cpu, struct cpu_set *cpu_set,
  *
  * @see for_each_cpu_except
  */
-#define for_each_cpu(cpu, set)	for_each_cpu_except(cpu, set, -1)
+#define for_each_cpu(cpu, set)	for_each_cpu_except(cpu, set, INVALID_CPU_ID)
 
 /**
  * Loop-generating macro for iterating over all CPUs in a set, except the
@@ -67,7 +67,7 @@ unsigned int next_cpu(unsigned int cpu, struct cpu_set *cpu_set,
  * @see for_each_cpu
  */
 #define for_each_cpu_except(cpu, set, exception)		\
-	for ((cpu) = -1;					\
+	for ((cpu) = (set)->min_cpu_id - 1;			\
 	     (cpu) = next_cpu((cpu), (set), (exception)),	\
 	     (cpu) <= (set)->max_cpu_id;			\
 	    )
@@ -115,11 +115,9 @@ unsigned int next_cpu(unsigned int cpu, struct cpu_set *cpu_set,
  */
 static inline bool cell_owns_cpu(struct cell *cell, unsigned int cpu_id)
 {
-	return (cpu_id <= cell->cpu_set->max_cpu_id &&
-		test_bit(cpu_id, cell->cpu_set->bitmap));
+	return (cpu_id <= cell->cpu_set.max_cpu_id &&
+		test_bit(cpu_id, cell->cpu_set.bitmap));
 }
-
-bool cpu_id_valid(unsigned long cpu_id);
 
 int cell_init(struct cell *cell);
 
@@ -191,6 +189,11 @@ void arch_park_cpu(unsigned int cpu_id);
 void arch_send_event(struct public_per_cpu *target_data);
 
 /**
+ * Check and process any internal events pending for the current CPU.
+ */
+void arch_check_events(void);
+
+/**
  * Performs the architecture-specific steps for mapping a memory region into a
  * cell's address space.
  * @param cell		Cell for which the mapping shall be done.
@@ -222,6 +225,8 @@ int arch_unmap_memory_region(struct cell *cell,
  * This function should be called after memory got unmapped or memory access
  * got restricted, and the cell should keep running.
  * @param cell		Cell for which the caches should get flushed
+ *
+ * @note Target cell must be suspended.
  *
  * @see public_per_cpu::flush_vcpu_caches
  */
@@ -255,16 +260,6 @@ void arch_cell_destroy(struct cell *cell);
  * @see arch_reset_cpu
  */
 void arch_cell_reset(struct cell *cell);
-
-/**
- * Performs the architecture-specific steps for applying configuration changes.
- * @param cell_added_removed	Cell that was added or removed to/from the
- * 				system or NULL.
- *
- * @see config_commit
- * @see pci_config_commit
- */
-void arch_config_commit(struct cell *cell_added_removed);
 
 /**
  * Architecture-specific preparations before shutting down the hypervisor.

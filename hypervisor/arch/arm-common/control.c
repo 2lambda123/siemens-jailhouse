@@ -2,7 +2,7 @@
  * Jailhouse, a Linux-based partitioning hypervisor
  *
  * Copyright (c) ARM Limited, 2014
- * Copyright (c) Siemens AG, 2016
+ * Copyright (c) Siemens AG, 2016-2022
  *
  * Authors:
  *  Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
@@ -62,8 +62,9 @@ void arch_park_cpu(unsigned int cpu_id)
 	resume_cpu(cpu_id);
 }
 
-static void check_events(struct public_per_cpu *cpu_public)
+void arch_check_events(void)
 {
+	struct public_per_cpu *cpu_public = this_cpu_public();
 	bool reset = false;
 
 	spin_lock(&cpu_public->control_lock);
@@ -125,7 +126,7 @@ void arch_handle_sgi(u32 irqn, unsigned int count_event)
 	case SGI_EVENT:
 		cpu_public->stats[JAILHOUSE_CPU_STAT_VMEXITS_MANAGEMENT] +=
 			count_event;
-		check_events(cpu_public);
+		arch_check_events();
 		break;
 	default:
 		printk("WARN: unknown SGI received %d\n", irqn);
@@ -161,7 +162,7 @@ int arch_cell_create(struct cell *cell)
 
 void arch_cell_reset(struct cell *cell)
 {
-	unsigned int first = first_cpu(cell->cpu_set);
+	unsigned int first = first_cpu(&cell->cpu_set);
 	unsigned int cpu;
 	struct jailhouse_comm_region *comm_region =
 		&cell->comm_page.comm_region;
@@ -178,7 +179,7 @@ void arch_cell_reset(struct cell *cell)
 	 * starts at cpu_reset_address, defined in the cell configuration.
 	 */
 	public_per_cpu(first)->cpu_on_entry = cell->config->cpu_reset_address;
-	for_each_cpu_except(cpu, cell->cpu_set, first)
+	for_each_cpu_except(cpu, &cell->cpu_set, first)
 		public_per_cpu(cpu)->cpu_on_entry = PSCI_INVALID_ADDRESS;
 
 	arm_cell_dcaches_flush(cell, DCACHE_INVALIDATE);
@@ -193,28 +194,21 @@ void arch_cell_destroy(struct cell *cell)
 	arm_cell_dcaches_flush(cell, DCACHE_INVALIDATE);
 
 	/* All CPUs are handed back to the root cell in suspended mode. */
-	for_each_cpu(cpu, cell->cpu_set)
+	for_each_cpu(cpu, &cell->cpu_set)
 		public_per_cpu(cpu)->cpu_on_entry = PSCI_INVALID_ADDRESS;
 
 	arm_paging_cell_destroy(cell);
 }
 
-/* Note: only supports synchronous flushing as triggered by config_commit! */
 void arch_flush_cell_vcpu_caches(struct cell *cell)
 {
 	unsigned int cpu;
 
-	for_each_cpu(cpu, cell->cpu_set)
+	for_each_cpu(cpu, &cell->cpu_set)
 		if (cpu == this_cpu_id())
 			arm_paging_vcpu_flush_tlbs();
 		else
 			public_per_cpu(cpu)->flush_vcpu_caches = true;
-}
-
-void arch_config_commit(struct cell *cell_added_removed)
-{
-	irqchip_config_commit(cell_added_removed);
-	iommu_config_commit(cell_added_removed);
 }
 
 void __attribute__((noreturn)) arch_panic_stop(void)

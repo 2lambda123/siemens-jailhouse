@@ -1,7 +1,7 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Copyright (c) Siemens AG, 2013-2016
+ * Copyright (c) Siemens AG, 2013-2022
  *
  * Authors:
  *  Jan Kiszka <jan.kiszka@siemens.com>
@@ -59,19 +59,22 @@ unsigned int next_cpu(unsigned int cpu, struct cpu_set *cpu_set,
 }
 
 /**
- * Check if a CPU ID is contained in the system's CPU set, i.e. the initial CPU
- * set of the root cell.
- * @param cpu_id	CPU ID to check.
+ * Update CPU set min/max boundaries.
+ * @param cpu_set	CPU set to update.
  *
- * @return True if CPU ID is valid.
+ * @note For internal use only. CPU set must not be empty.
  */
-bool cpu_id_valid(unsigned long cpu_id)
+static void cpu_set_update(struct cpu_set *cpu_set)
 {
-	const unsigned long *system_cpu_set =
-		jailhouse_cell_cpu_set(&system_config->root_cell);
+	unsigned int cpu, max_cpu = 0;
 
-	return (cpu_id < system_config->root_cell.cpu_set_size * 8 &&
-		test_bit(cpu_id, system_cpu_set));
+	cpu_set->min_cpu_id = 0;
+	cpu_set->max_cpu_id = sizeof(cpu_set->bitmap) * 8 - 1;
+
+	cpu_set->min_cpu_id = first_cpu(cpu_set);
+	for_each_cpu(cpu, cpu_set)
+		max_cpu = cpu;
+	cpu_set->max_cpu_id = max_cpu;
 }
 
 /**
@@ -143,7 +146,7 @@ static void cell_suspend(struct cell *cell)
 {
 	unsigned int cpu;
 
-	for_each_cpu_except(cpu, cell->cpu_set, this_cpu_id())
+	for_each_cpu_except(cpu, &cell->cpu_set, this_cpu_id())
 		suspend_cpu(cpu);
 }
 
@@ -151,7 +154,7 @@ static void cell_resume(struct cell *cell)
 {
 	unsigned int cpu;
 
-	for_each_cpu_except(cpu, cell->cpu_set, this_cpu_id())
+	for_each_cpu_except(cpu, &cell->cpu_set, this_cpu_id())
 		resume_cpu(cpu);
 }
 
@@ -240,57 +243,52 @@ static void cell_reconfig_completed(void)
  */
 int cell_init(struct cell *cell)
 {
-	const unsigned long *config_cpu_set =
-		jailhouse_cell_cpu_set(cell->config);
-	unsigned long cpu_set_size = cell->config->cpu_set_size;
-	struct cpu_set *cpu_set;
-	int err;
+	const struct jailhouse_cpu *cell_cpu =
+		jailhouse_cell_cpus(cell->config);
+	unsigned int cpu_idx, result;
 
-	if (cpu_set_size > PAGE_SIZE)
+	if (cell->config->num_cpus > sizeof(cell->cpu_set.bitmap) * 8)
 		return trace_error(-EINVAL);
-	if (cpu_set_size > sizeof(cell->small_cpu_set.bitmap)) {
-		cpu_set = page_alloc(&mem_pool, 1);
-		if (!cpu_set)
-			return -ENOMEM;
-	} else {
-		cpu_set = &cell->small_cpu_set;
+
+	for (cpu_idx = 0; cpu_idx < cell->config->num_cpus; cpu_idx++) {
+		result = cpu_by_phys_processor_id(cell_cpu[cpu_idx].phys_id);
+		if (result == INVALID_CPU_ID)
+			return -ENOENT;
+
+		set_bit(result, cell->cpu_set.bitmap);
 	}
-	cpu_set->max_cpu_id = cpu_set_size * 8 - 1;
-	memcpy(cpu_set->bitmap, config_cpu_set, cpu_set_size);
+	cpu_set_update(&cell->cpu_set);
 
-	cell->cpu_set = cpu_set;
-
-	err = mmio_cell_init(cell);
-	if (err && cell->cpu_set != &cell->small_cpu_set)
-		page_free(&mem_pool, cell->cpu_set, 1);
-
-	return err;
+	return mmio_cell_init(cell);
 }
 
 static void cell_exit(struct cell *cell)
 {
 	mmio_cell_exit(cell);
-
-	if (cell->cpu_set != &cell->small_cpu_set)
-		page_free(&mem_pool, cell->cpu_set, 1);
 }
 
 /**
  * Apply system configuration changes.
  * @param cell_added_removed	Cell that was added or removed to/from the
  * 				system or NULL.
- *
- * @see arch_config_commit
- * @see pci_config_commit
  */
 void config_commit(struct cell *cell_added_removed)
 {
-	arch_flush_cell_vcpu_caches(&root_cell);
-	if (cell_added_removed && cell_added_removed != &root_cell)
-		arch_flush_cell_vcpu_caches(cell_added_removed);
+	struct unit *unit;
 
-	arch_config_commit(cell_added_removed);
-	pci_config_commit(cell_added_removed);
+	/*
+	 * We do not need to flush the caches during setup, i.e. when the root
+	 * cell was added, because there was no reconfiguration of the new
+	 * mapping done yet.
+	 */
+	if (cell_added_removed != &root_cell) {
+		arch_flush_cell_vcpu_caches(&root_cell);
+		if (cell_added_removed)
+			arch_flush_cell_vcpu_caches(cell_added_removed);
+	}
+
+	for_each_unit(unit)
+		unit->config_commit(cell_added_removed);
 }
 
 static bool address_in_region(unsigned long addr,
@@ -369,15 +367,16 @@ static void cell_destroy_internal(struct cell *cell)
 
 	cell->comm_page.comm_region.cell_state = JAILHOUSE_CELL_SHUT_DOWN;
 
-	for_each_cpu(cpu, cell->cpu_set) {
+	for_each_cpu(cpu, &cell->cpu_set) {
 		arch_park_cpu(cpu);
 
-		set_bit(cpu, root_cell.cpu_set->bitmap);
+		set_bit(cpu, root_cell.cpu_set.bitmap);
 		public_per_cpu(cpu)->cell = &root_cell;
 		public_per_cpu(cpu)->failed = false;
 		memset(public_per_cpu(cpu)->stats, 0,
 		       sizeof(public_per_cpu(cpu)->stats));
 	}
+	cpu_set_update(&root_cell.cpu_set);
 
 	for_each_mem_region(mem, cell->config, n) {
 		if (!JAILHOUSE_MEMORY_IS_SUBPAGE(mem))
@@ -482,7 +481,7 @@ static int cell_create(struct per_cpu *cpu_data, unsigned long config_address)
 	}
 
 	/* the root cell's cpu set must be super-set of new cell's set */
-	for_each_cpu(cpu, cell->cpu_set)
+	for_each_cpu(cpu, &cell->cpu_set)
 		if (!cell_owns_cpu(&root_cell, cpu)) {
 			err = trace_error(-EBUSY);
 			goto err_cell_exit;
@@ -505,14 +504,15 @@ static int cell_create(struct per_cpu *cpu_data, unsigned long config_address)
 	 * Shrinking: the new cell's CPUs are parked, then removed from the root
 	 * cell, assigned to the new cell and get their stats cleared.
 	 */
-	for_each_cpu(cpu, cell->cpu_set) {
+	for_each_cpu(cpu, &cell->cpu_set) {
 		arch_park_cpu(cpu);
 
-		clear_bit(cpu, root_cell.cpu_set->bitmap);
+		clear_bit(cpu, root_cell.cpu_set.bitmap);
 		public_per_cpu(cpu)->cell = cell;
 		memset(public_per_cpu(cpu)->stats, 0,
 		       sizeof(public_per_cpu(cpu)->stats));
 	}
+	cpu_set_update(&root_cell.cpu_set);
 
 	/*
 	 * Unmap the cell's memory regions from the root cell and map them to
@@ -667,7 +667,7 @@ static int cell_start(struct per_cpu *cpu_data, unsigned long id)
 	pci_cell_reset(cell);
 	arch_cell_reset(cell);
 
-	for_each_cpu(cpu, cell->cpu_set) {
+	for_each_cpu(cpu, &cell->cpu_set) {
 		public_per_cpu(cpu)->failed = false;
 		arch_reset_cpu(cpu);
 	}
@@ -695,7 +695,7 @@ static int cell_set_loadable(struct per_cpu *cpu_data, unsigned long id)
 	 * Unconditionally park so that the target cell's CPUs don't stay in
 	 * suspension mode.
 	 */
-	for_each_cpu(cpu, cell->cpu_set) {
+	for_each_cpu(cpu, &cell->cpu_set) {
 		public_per_cpu(cpu)->failed = false;
 		arch_park_cpu(cpu);
 	}
@@ -839,7 +839,7 @@ static int hypervisor_disable(struct per_cpu *cpu_data)
 
 	if (cpu_data->public.shutdown_state == SHUTDOWN_NONE) {
 		state = num_cells == 1 ? SHUTDOWN_STARTED : -EBUSY;
-		for_each_cpu(cpu, root_cell.cpu_set)
+		for_each_cpu(cpu, &root_cell.cpu_set)
 			public_per_cpu(cpu)->shutdown_state = state;
 	}
 
@@ -904,7 +904,7 @@ static long hypervisor_get_info(struct per_cpu *cpu_data, unsigned long type)
 static int cpu_get_info(struct per_cpu *cpu_data, unsigned long cpu_id,
 			unsigned long type)
 {
-	if (!cpu_id_valid(cpu_id))
+	if (cpu_id >= system_config->root_cell.num_cpus)
 		return -EINVAL;
 
 	/*
@@ -1012,7 +1012,7 @@ void panic_park(void)
 		     cell->config->name);
 
 	this_cpu_public()->failed = true;
-	for_each_cpu(cpu, cell->cpu_set)
+	for_each_cpu(cpu, &cell->cpu_set)
 		if (!public_per_cpu(cpu)->failed) {
 			cell_failed = false;
 			break;
